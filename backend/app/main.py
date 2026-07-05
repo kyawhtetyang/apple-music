@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-import os
 import boto3
 from botocore.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.settings import (
     R2_ENDPOINT, R2_ACCESS_KEY, R2_SECRET_KEY, R2_BUCKET,
@@ -28,6 +28,7 @@ s3_client = boto3.client(
 # -------------------------
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TRACKS_READY = False
 
 def get_db():
     db = SessionLocal()
@@ -60,8 +61,88 @@ app.add_middleware(
 # -------------------------
 # UTILS
 # -------------------------
+def sync_tracks_from_r2(db: Session):
+    resp = s3_client.list_objects_v2(Bucket=R2_BUCKET)
+    album_files = {}
+
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        parts = key.split("/")
+        if len(parts) <= 1:
+            continue
+
+        album_name = parts[0]
+        if album_name not in album_files:
+            album_files[album_name] = {"tracks": [], "images": []}
+
+        lower_key = key.lower()
+        if lower_key.endswith(".mp3"):
+            album_files[album_name]["tracks"].append(key)
+        elif lower_key.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            album_files[album_name]["images"].append(key)
+
+    is_postgres = engine.dialect.name == "postgresql"
+    id_col = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+    db.execute(text("DROP TABLE IF EXISTS tracks;"))
+    db.execute(text(f"""
+        CREATE TABLE tracks (
+            track_id {id_col},
+            album_name TEXT,
+            track_name TEXT,
+            audio_key TEXT UNIQUE,
+            cover_key TEXT
+        );
+    """))
+
+    for album_name, files in album_files.items():
+        cover_key = None
+        for image_key in files["images"]:
+            lower_image = image_key.lower()
+            if any(token in lower_image for token in ["cover", "front", "folder", "thumb", "tape"]):
+                cover_key = image_key
+                break
+        if cover_key is None and files["images"]:
+            cover_key = files["images"][0]
+
+        for audio_key in files["tracks"]:
+            track_name = audio_key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            db.execute(
+                text("""
+                    INSERT INTO tracks (album_name, track_name, audio_key, cover_key)
+                    VALUES (:album_name, :track_name, :audio_key, :cover_key)
+                """),
+                {
+                    "album_name": album_name,
+                    "track_name": track_name,
+                    "audio_key": audio_key,
+                    "cover_key": cover_key,
+                }
+            )
+
+    db.commit()
+
+
+def ensure_tracks_ready(db: Session):
+    global TRACKS_READY
+
+    if TRACKS_READY:
+        return
+
+    try:
+        result = db.execute(text("SELECT COUNT(*) FROM tracks")).scalar()
+        if result and result > 0:
+            TRACKS_READY = True
+            return
+    except SQLAlchemyError:
+        db.rollback()
+
+    sync_tracks_from_r2(db)
+    TRACKS_READY = True
+
+
 def fetch_tracks(db: Session):
-    # Updated to include cover_key
+    ensure_tracks_ready(db)
     result = db.execute(text("SELECT track_id, album_name, track_name, audio_key, cover_key FROM tracks ORDER BY track_id ASC"))
     return [dict(row._mapping) for row in result]
 
