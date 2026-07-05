@@ -1,17 +1,7 @@
 import boto3
-import os
 from boto3.s3.transfer import TransferConfig
 
-# -----------------------------
-# R2 Cloudflare credentials
-# Make sure these are exported in terminal, NOT hardcoded
-# export AWS_ACCESS_KEY_ID="YOUR_KEY"
-# export AWS_SECRET_ACCESS_KEY="YOUR_SECRET"
-# export AWS_DEFAULT_REGION="auto"
-# -----------------------------
-R2_ENDPOINT = "https://f58fea9e1b60da06ec030cf25a67cc53.r2.cloudflarestorage.com"
-BUCKET_NAME = "music-app-album"
-LOCAL_MUSIC_DIR = "./music_library"
+from app.settings import MUSIC_DIR, R2_BUCKET, R2_ENDPOINT
 
 # -----------------------------
 # Boto3 client
@@ -32,17 +22,17 @@ config = TransferConfig(
 # -----------------------------
 # Upload files recursively
 # -----------------------------
-for root, dirs, files in os.walk(LOCAL_MUSIC_DIR):
-    for file in files:
-        local_path = os.path.join(root, file)
-        relative_path = os.path.relpath(local_path, LOCAL_MUSIC_DIR)
-        print(f"Uploading {relative_path}...")
-        client.upload_file(
-            local_path,
-            BUCKET_NAME,
-            relative_path,
-            Config=config
-        )
+for local_path in MUSIC_DIR.rglob("*"):
+    if not local_path.is_file():
+        continue
+
+    relative_path = local_path.relative_to(MUSIC_DIR).as_posix()
+    print(f"Uploading {relative_path}...")
+    client.upload_file(
+        str(local_path),
+        R2_BUCKET,
+        relative_path,
+        Config=config
+    )
 
 print("✅ Upload complete")
-
