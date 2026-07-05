@@ -1,0 +1,9 @@
+{
+  "name": "MusicApp - Local Music Player",
+  "description": "A production-grade React application for browsing and playing local music collections with AI-enhanced metadata. Includes complete system design for a FastAPI/PostgreSQL backend.",
+  "requestFramePermissions": []
+}
+
+
+
+

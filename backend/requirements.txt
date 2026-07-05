@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+mutagen
+python-multipart
+psycopg2-binary
+boto3
+python-dotenv
+
+
